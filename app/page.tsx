@@ -21,8 +21,14 @@ export default function Dashboard() {
       .then((payload) => {
         if (!cancelled) setData(payload)
       })
-      .catch(() => {
-        if (!cancelled) setLoadError("Could not load dashboard (using empty state).")
+      .catch((e) => {
+        if (cancelled) return
+        const isDev = process.env.NODE_ENV === "development"
+        setLoadError(
+          isDev && e instanceof Error
+            ? e.message
+            : "Could not load dashboard (using empty state).",
+        )
       })
     return () => {
       cancelled = true
