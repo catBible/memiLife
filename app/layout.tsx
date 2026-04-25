@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+import { Providers } from './providers'
 import './globals.css'
 
 const inter = Inter({ 
@@ -12,6 +13,11 @@ export const metadata: Metadata = {
   title: 'memiLife',
   description: 'memiLife — personal dashboard for health, finance, and work',
   generator: 'v0.app',
+  appleWebApp: {
+    capable: true,
+    title: 'memiLife',
+    statusBarStyle: 'black-translucent',
+  },
   icons: {
     icon: [
       {
@@ -45,7 +51,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark bg-background">
       <body className={`${inter.variable} font-sans antialiased`}>
-        {children}
+        <Providers>{children}</Providers>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>

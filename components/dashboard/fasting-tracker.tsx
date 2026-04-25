@@ -1,71 +1,110 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Timer, Utensils } from "lucide-react"
 
+type WindowMode = "eating" | "fasting"
+
+function getIf168Window(now: Date): {
+  mode: WindowMode
+  progress: number
+  remainingMs: number
+} {
+  const y = now.getFullYear()
+  const mo = now.getMonth()
+  const da = now.getDate()
+  const today12 = new Date(y, mo, da, 12, 0, 0, 0)
+  const today20 = new Date(y, mo, da, 20, 0, 0, 0)
+  const t = now.getTime()
+
+  if (t >= today12.getTime() && t < today20.getTime()) {
+    const total = today20.getTime() - today12.getTime()
+    const elapsed = t - today12.getTime()
+    return {
+      mode: "eating",
+      progress: (elapsed / total) * 100,
+      remainingMs: today20.getTime() - t,
+    }
+  }
+
+  if (t >= today20.getTime()) {
+    const fastStart = today20.getTime()
+    const tomorrow12 = new Date(today12)
+    tomorrow12.setDate(tomorrow12.getDate() + 1)
+    const fastTotal = tomorrow12.getTime() - fastStart
+    const elapsed = t - fastStart
+    return {
+      mode: "fasting",
+      progress: (elapsed / fastTotal) * 100,
+      remainingMs: tomorrow12.getTime() - t,
+    }
+  }
+
+  const yesterday20 = new Date(today20)
+  yesterday20.setDate(yesterday20.getDate() - 1)
+  const fastStart = yesterday20.getTime()
+  const fastEnd = today12.getTime()
+  const fastTotal = fastEnd - fastStart
+  const elapsed = t - fastStart
+  return {
+    mode: "fasting",
+    progress: (elapsed / fastTotal) * 100,
+    remainingMs: fastEnd - t,
+  }
+}
+
+function formatRemaining(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (h > 0) return `${h}h ${m}m ${sec}s`
+  if (m > 0) return `${m}m ${sec}s`
+  return `${sec}s`
+}
+
 export function FastingTracker() {
-  const [currentTime, setCurrentTime] = useState(new Date())
-  
+  /** null until client mount — avoids SSR/client clock mismatch hydration errors */
+  const [currentTime, setCurrentTime] = useState<Date | null>(null)
+
   useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date())
-    }, 1000)
+    setCurrentTime(new Date())
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
     return () => clearInterval(timer)
   }, [])
 
-  // Eating window: 12:00 PM - 08:00 PM (12:00 - 20:00)
-  const eatingStartHour = 12
-  const eatingEndHour = 20
-  const currentHour = currentTime.getHours()
-  const currentMinute = currentTime.getMinutes()
-  
-  const isEatingWindow = currentHour >= eatingStartHour && currentHour < eatingEndHour
-  
-  // Calculate progress and countdown
-  let progress = 0
-  let countdownText = ""
-  let targetText = ""
-  
-  if (isEatingWindow) {
-    // During eating window
-    const minutesIntoEating = (currentHour - eatingStartHour) * 60 + currentMinute
-    const totalEatingMinutes = (eatingEndHour - eatingStartHour) * 60
-    progress = (minutesIntoEating / totalEatingMinutes) * 100
-    
-    const remainingMinutes = totalEatingMinutes - minutesIntoEating
-    const hours = Math.floor(remainingMinutes / 60)
-    const mins = remainingMinutes % 60
-    countdownText = `${hours}h ${mins}m until fasting`
-    targetText = "Eating window ends at 8:00 PM"
-  } else {
-    // During fasting window
-    let fastingMinutes = 0
-    let totalFastingMinutes = 16 * 60 // 16 hours
-    
-    if (currentHour >= eatingEndHour) {
-      // After 8 PM, before midnight
-      fastingMinutes = (currentHour - eatingEndHour) * 60 + currentMinute
-    } else {
-      // After midnight, before noon
-      fastingMinutes = (24 - eatingEndHour + currentHour) * 60 + currentMinute
+  const { mode, progress, remainingMs } = useMemo(() => {
+    if (!currentTime) {
+      return {
+        mode: "fasting" as WindowMode,
+        progress: 0,
+        remainingMs: 0,
+      }
     }
-    
-    progress = (fastingMinutes / totalFastingMinutes) * 100
-    
-    const remainingMinutes = totalFastingMinutes - fastingMinutes
-    const hours = Math.floor(remainingMinutes / 60)
-    const mins = remainingMinutes % 60
-    countdownText = hours > 0 ? `${hours}h ${mins}m until eating` : `${mins}m until eating`
-    targetText = "Eating window starts at 12:00 PM"
-  }
+    return getIf168Window(currentTime)
+  }, [currentTime])
 
-  // SVG circle calculations
+  const isEatingWindow = mode === "eating"
+  const clampedProgress = Math.min(100, Math.max(0, progress))
+
+  const countdownText = !currentTime
+    ? "…"
+    : isEatingWindow
+      ? `${formatRemaining(remainingMs)} until fasting`
+      : `${formatRemaining(remainingMs)} until eating`
+
+  const targetText = isEatingWindow
+    ? "Eating window ends at 8:00 PM"
+    : "Eating window starts at 12:00 PM"
+
   const size = 180
   const strokeWidth = 12
   const radius = (size - strokeWidth) / 2
   const circumference = 2 * Math.PI * radius
-  const strokeDashoffset = circumference - (progress / 100) * circumference
+  const strokeDashoffset = Number(
+    (circumference - (clampedProgress / 100) * circumference).toFixed(4),
+  )
 
   return (
     <Card className="bg-card border-border">
@@ -78,7 +117,6 @@ export function FastingTracker() {
       <CardContent className="flex flex-col items-center gap-4 pt-4">
         <div className="relative">
           <svg width={size} height={size} className="-rotate-90">
-            {/* Background circle */}
             <circle
               cx={size / 2}
               cy={size / 2}
@@ -88,7 +126,6 @@ export function FastingTracker() {
               strokeWidth={strokeWidth}
               className="text-secondary"
             />
-            {/* Progress circle */}
             <circle
               cx={size / 2}
               cy={size / 2}
@@ -99,13 +136,34 @@ export function FastingTracker() {
               strokeLinecap="round"
               strokeDasharray={circumference}
               strokeDashoffset={strokeDashoffset}
-              className={isEatingWindow ? "text-success" : "text-chart-1"}
-              style={{ transition: "stroke-dashoffset 1s ease" }}
+              className={
+                !currentTime
+                  ? "text-muted-foreground/40"
+                  : isEatingWindow
+                    ? "text-success"
+                    : "text-chart-1"
+              }
+              style={{
+                transition: currentTime ? "stroke-dashoffset 0.35s linear" : undefined,
+              }}
             />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <div className={`flex items-center gap-2 text-lg font-semibold ${isEatingWindow ? "text-success" : "text-chart-1"}`}>
-              {isEatingWindow ? (
+            <div
+              className={`flex items-center gap-2 text-lg font-semibold ${
+                !currentTime
+                  ? "text-muted-foreground"
+                  : isEatingWindow
+                    ? "text-success"
+                    : "text-chart-1"
+              }`}
+            >
+              {!currentTime ? (
+                <>
+                  <Timer className="h-5 w-5" />
+                  …
+                </>
+              ) : isEatingWindow ? (
                 <>
                   <Utensils className="h-5 w-5" />
                   Eating
@@ -117,12 +175,12 @@ export function FastingTracker() {
                 </>
               )}
             </div>
-            <span className="text-2xl font-bold text-foreground mt-1">
-              {Math.round(progress)}%
+            <span className="mt-1 text-2xl font-bold text-foreground">
+              {currentTime ? `${Math.round(clampedProgress)}%` : "—"}
             </span>
           </div>
         </div>
-        <div className="text-center space-y-1">
+        <div className="space-y-1 text-center">
           <p className="text-lg font-medium text-foreground">{countdownText}</p>
           <p className="text-sm text-muted-foreground">{targetText}</p>
         </div>

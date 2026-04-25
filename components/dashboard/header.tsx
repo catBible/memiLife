@@ -1,15 +1,24 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { User, GraduationCap } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
 export function Header() {
-  const currentDate = new Date().toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  })
+  const [dateLabel, setDateLabel] = useState<string | null>(null)
+
+  useEffect(() => {
+    const format = () =>
+      new Date().toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })
+    setDateLabel(format())
+    const id = setInterval(() => setDateLabel(format()), 60_000)
+    return () => clearInterval(id)
+  }, [])
 
   return (
     <header className="flex items-center justify-between py-6">
@@ -17,7 +26,7 @@ export function Header() {
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">
           Good morning, Developer
         </h1>
-        <p className="text-sm text-muted-foreground">{currentDate}</p>
+        <p className="text-sm text-muted-foreground">{dateLabel ?? "…"}</p>
       </div>
       <div className="flex items-center gap-3">
         <div className="hidden sm:flex flex-col items-end">
