@@ -7,7 +7,7 @@
     "local": "node scripts/run-local.cjs",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

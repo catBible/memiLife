@@ -96,7 +96,7 @@ function toHttpOriginOnly(raw: string): string {
 /**
  * Where the Next server should fetch the Spring API (origin only, no path).
  */
-function backendOriginForServer(): string {
+export function backendOriginForServer(): string {
   const a = toHttpOriginOnly(
     (process.env.MEMI_BACKEND_URL ??
       process.env.SUPPLEMENTS_API_ORIGIN ??
