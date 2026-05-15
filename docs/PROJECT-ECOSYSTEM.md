@@ -30,6 +30,34 @@ flowchart LR
 - **Next server** ดึงรายการจาก Spring แล้ว **จัดกอง noon/night** ก่อนส่ง JSON ให้ client
 - **ฐานข้อมูล** ถูกดูแลโดย **Flyway** ใน memi-backend; entity JPA ต้องสอดคล้องกับคอลัมน์
 
+### 1b) Tasks (Memi Task) — flow
+
+```mermaid
+flowchart LR
+  subgraph browser [Browser]
+    TasksPage[app/tasks/page.tsx]
+  end
+  subgraph next [memiLife server]
+    TApi["/api/tasks ..."]
+    TaskSvc[lib/services/task.ts]
+    Proxy[lib/server/proxy-spring.ts]
+  end
+  subgraph spring [memi-backend]
+    ST["/api/tasks"]
+    TaskSvcB[TaskService]
+    DB2[(Postgres / H2)]
+  end
+  TasksPage -->|fetch same-origin| TApi
+  TApi --> Proxy
+  TaskSvc -->|server: direct origin / client: /api/tasks| TApi
+  Proxy -->|X-API-Key + forward| ST
+  ST --> TaskSvcB --> DB2
+```
+
+- หน้า **`/tasks`** (server component) เรียก **`getAllTasks()`** → บน server ดึง **`{origin}/api/tasks`**; ใน browser เรียก **`/api/tasks`** แล้วให้ Route Handler proxy ไป Spring
+- Response ของ task API ใช้ **`{ success, data, message? }`** (`ApiResponse`) — ฝั่ง **`lib/services/task.ts`** จะ **unwrap `data`**
+- Mutation (POST/PATCH/DELETE): proxy ส่ง **`X-API-Key`** จาก header ของ request หรือจาก **`MEMI_BACKEND_API_KEY`** (env บน Vercel)
+
 ---
 
 ## 2) Repository: memiLife (repo นี้)
@@ -47,31 +75,44 @@ flowchart LR
 ```
 memiLife/
 ├── app/
-│   ├── layout.tsx              # root layout
-│   ├── page.tsx                # dashboard (client); โหลด fetchDashboardData()
+│   ├── layout.tsx
+│   ├── page.tsx                # dashboard (client); fetchDashboardData()
+│   ├── tasks/
+│   │   └── page.tsx            # Memi Task — server: getAllTasks() → TaskList
 │   ├── providers.tsx
 │   ├── globals.css
 │   ├── manifest.ts
 │   └── api/
-│       └── supplements/
-│           └── all/
-│               └── route.ts    # GET → getDashboardPayload() → JSON DashboardPayload
+│       ├── supplements/
+│       │   └── all/
+│       │       └── route.ts    # GET → getDashboardPayload()
+│       └── tasks/
+│           ├── route.ts                    # GET/POST proxy → /api/tasks
+│           ├── [id]/
+│           │   ├── route.ts                # GET/PATCH/DELETE
+│           │   ├── schedule/route.ts       # PATCH schedule
+│           │   └── timer/[action]/route.ts # PATCH start|pause|stop
 ├── components/
-│   ├── dashboard/              # การ์ดแดชบอร์ด (header, fasting, supplements, …)
-│   └── ui/                     # primitives (button, card, scroll-area, …)
+│   ├── dashboard/              # header (ลิงก์ Tasks → /tasks), fasting, supplements, …
+│   ├── task/                   # task-list, task-form, task-timer, schedule-edit, task-delete-dialog
+│   └── ui/
 ├── lib/
+│   ├── server/
+│   │   └── proxy-spring.ts     # forward ไป Spring + X-API-Key
 │   ├── utils.ts
 │   └── services/
-│       └── dashboard.ts      # แหล่งความจริง: proxy URL, map API → UI, แบ่ง noon/night
+│       ├── dashboard.ts        # supplements + export backendOriginForServer()
+│       └── task.ts             # CRUD/schedule/timer; unwrap ApiResponse
+├── types/
+│   └── task.ts                 # Task, TaskWriteBody, ApiEnvelope, …
 ├── hooks/
 ├── public/
 ├── scripts/
-│   └── run-local.cjs           # Windows: เปิด Spring อีกหน้าต่าง + npm run dev
-├── styles/                     # global styles เพิ่มเติม (ถ้ามี)
+│   └── run-local.cjs
 ├── next.config.mjs
 ├── tsconfig.json
-├── package.json
-└── .env.example
+├── package.json                # "lint": "tsc --noEmit"
+└── .env.example                # MEMI_BACKEND_URL, NEXT_PUBLIC_API_URL, MEMI_BACKEND_API_KEY
 ```
 
 ### เส้นทางข้อมูล (dashboard supplements)
@@ -83,11 +124,19 @@ memiLife/
    - `fetch(`${origin}/api/supplements/all`)` คาดหวัง **JSON array** จาก Spring
    - รัน **`buildDashboardFromRows()`** → โครงสร้าง **`DashboardPayload`** (`supplementStacks.noon` / `.night`)
 
+### เส้นทางข้อมูล (Memi Task — `/tasks`)
+
+1. **`app/tasks/page.tsx`** (server) เรียก **`getAllTasks()`** ใน `lib/services/task.ts` → `fetch(`${backendOriginForServer()}/api/tasks`)` พร้อม timeout
+2. ใน browser: **`fetch("/api/tasks", …)`** → **`app/api/tasks/route.ts`** → **`proxySpring`** ไป **`GET {origin}/api/tasks`**
+3. Spring คืน **`{ "success": true, "data": [ …Task… ] }`** — `task.ts` ใช้ **`unwrap` / `unwrapRequired`** อ่าน `data`
+4. สร้าง/แก้/ลบงาน: **`POST|PATCH|DELETE /api/tasks/...`** ต้องมี **`X-API-Key`** ฝั่ง Spring; Next ใส่จาก **`MEMI_BACKEND_API_KEY`** หรือจาก header ที่ browser ส่งมา (ถ้ามี)
+
 ### ตัวแปรสภาพแวดล้อม (memiLife)
 
 | ตัวแปร | ใครอ่าน | ความหมาย |
 |--------|----------|-----------|
 | `MEMI_BACKEND_URL` | **เฉพาะ Next server** | Base ของ Spring; **ใช้เฉพาะ origin** (ตัด path เช่น `/api/v1` ออกใน `toHttpOriginOnly`) |
+| `MEMI_BACKEND_API_KEY` | **Next server** (Route Handlers) | ส่งเป็น **`X-API-Key`** ไป Spring เมื่อ client ไม่ได้แนบ header (ต้องตรงกับ `API_KEY` / `app.api.key` ของ backend) |
 | `NEXT_PUBLIC_API_URL` | ลำดับรองสำหรับ origin + ใช้ hint ใน `logSupplement` | ถ้าไม่ตั้ง `MEMI_BACKEND_URL` อาจถูกใช้เป็น fallback ร่วมกับ dev default |
 | `SUPPLEMENTS_API_ORIGIN` | server (fallback chain) | ทางเลือกเพิ่มใน `backendOriginForServer()` |
 
@@ -144,27 +193,45 @@ com.memi.lifeos/
 │   ├── OpenApiConfig.java
 │   └── DatabaseUrlEnvironmentPostProcessor.java   # แปลง DATABASE_URL (postgres://) → JDBC
 ├── web/
-│   └── LivenessController.java         # health / probes
+│   ├── LivenessController.java         # health / probes
+│   └── dto/
+│       └── ApiResponse.java            # envelope Task API: success, data, message
 ├── error/
-│   └── GlobalExceptionHandler.java
-└── supplement/
+│   ├── GlobalExceptionHandler.java
+│   └── ResourceNotFoundException.java  # 404 (extends ResponseStatusException)
+├── supplement/
+│   ├── api/
+│   │   └── SupplementController.java   # @RequestMapping("/api/supplements")
+│   ├── entity/
+│   │   └── Supplement.java             # JPA entity ↔ ตาราง supplements
+│   ├── repository/
+│   │   ├── SupplementRepository.java
+│   │   └── SupplementQuerySpecs.java   # optional search q
+│   ├── service/
+│   │   └── SupplementService.java
+│   ├── dto/
+│   │   ├── SupplementResponse.java     # JSON ออก camelCase + @JsonAlias รับ snake_case
+│   │   ├── SupplementWriteRequest.java
+│   │   └── SupplementMapper.java
+│   └── H2SupplementDevSeed.java        # seed เมื่อ profile h2 และตารางว่าง (เงื่อนไขในโค้ด)
+└── task/
     ├── api/
-    │   └── SupplementController.java   # @RequestMapping("/api/supplements")
+    │   └── TaskController.java         # @RequestMapping("/api/tasks") → ResponseEntity<ApiResponse<…>>
     ├── entity/
-    │   └── Supplement.java             # JPA entity ↔ ตาราง supplements
+    │   └── Task.java                   # tagsJson = TEXT เก็บ JSON array string เช่น []
     ├── repository/
-    │   ├── SupplementRepository.java
-    │   └── SupplementQuerySpecs.java   # optional search q
+    │   └── TaskRepository.java
     ├── service/
-    │   └── SupplementService.java
-    ├── dto/
-    │   ├── SupplementResponse.java     # JSON ออก camelCase + @JsonAlias รับ snake_case
-    │   ├── SupplementWriteRequest.java
-    │   └── SupplementMapper.java
-    └── H2SupplementDevSeed.java        # seed เมื่อ profile h2 และตารางว่าง (เงื่อนไขในโค้ด)
+    │   └── TaskService.java            # soft delete, timer, schedule
+    └── dto/
+        ├── TaskResponse.java
+        ├── TaskWriteRequest.java
+        ├── TaskPatchRequest.java
+        ├── UpdateScheduleRequest.java
+        └── TaskMapper.java
 ```
 
-### REST API สรุป (`/api/supplements`)
+### REST API — อาหารเสริม (`/api/supplements`)
 
 | Method | Path | คำอธิบาย |
 |--------|------|-----------|
@@ -174,6 +241,22 @@ com.memi.lifeos/
 | POST | `/api/supplements` | สร้าง (ต้อง API key เมื่อเปิดใช้) |
 | PUT | `/api/supplements/{id}` | แทนที่ทั้งก้อน |
 | DELETE | `/api/supplements/{id}` | ลบ |
+
+### REST API — งาน (`/api/tasks`)
+
+ทุก response ห่อด้วย **`ApiResponse<T>`** (ยกเว้น health ฯลฯ). Write ต้อง **`X-API-Key`** เมื่อตั้ง `API_KEY` แล้ว
+
+| Method | Path | คำอธิบาย |
+|--------|------|-----------|
+| GET | `/api/tasks` | รายการที่ยังไม่ soft-delete |
+| GET | `/api/tasks/{id}` | รายการเดียว |
+| POST | `/api/tasks` | สร้าง |
+| PATCH | `/api/tasks/{id}` | แก้บางฟิลด์ |
+| DELETE | `/api/tasks/{id}` | soft delete (`deleted_at`) |
+| PATCH | `/api/tasks/{id}/schedule` | `scheduledAt`, `endAt`, `dueAt` |
+| PATCH | `/api/tasks/{id}/timer/start` | เริ่มจับเวลา |
+| PATCH | `/api/tasks/{id}/timer/pause` | หยุดชั่วคราว + สะสมวินาที |
+| PATCH | `/api/tasks/{id}/timer/stop` | หยุด + อัปเดต `actualMinutes` |
 
 ### การตั้งค่ารัน (`src/main/resources/`)
 
@@ -189,7 +272,11 @@ com.memi.lifeos/
 
 ### SQL มือ (`memi-backend/db/manual/`)
 
-- สคริปต์เสริมที่ไม่ผ่าน Flyway (เช่น **`add_supplement_dose_and_meal.sql`**) ใช้เมื่อต้องแก้ DB บน environment ที่มีอยู่แล้วด้วยมือ
+| ไฟล์ | ใช้เมื่อ |
+|------|----------|
+| `add_supplement_dose_and_meal.sql` | แก้คอลัมน์ supplement บน DB ที่มีอยู่แล้ว |
+| `create_tasks_table_postgres.sql` | **สร้างตาราง `tasks` ทันที** ใน SQL Editor (Railway/Supabase) เมื่อ Flyway ยังไม่สร้าง |
+| `README.md` | เช็คลิสต์ Flyway vs manual |
 
 ---
 
@@ -207,6 +294,17 @@ com.memi.lifeos/
 | V5 | `V5__meal_timing.sql` | เพิ่ม **`meal_timing`** (VARCHAR 32; ค่าแนะนำ `before` / `after`) |
 
 หมายเหตุ: **ไม่มี V2** ใน repo ปัจจุบัน (ข้ามเลขเวอร์ชันเพื่อหลีกเลี่ยง conflict ตามคอมเมนต์ใน V3)
+
+### Flyway — ตาราง `tasks`
+
+| Version | ไฟล์ | หน้าที่โดยย่อ |
+|---------|------|----------------|
+| V6 | `V6__tasks.sql` | สร้าง `tasks` (เดิม `tags` เป็น `TEXT[]`) |
+| V7 | `V7__tasks_tags_text_json.sql` | ถ้า `tags` ยังเป็น PostgreSQL **`_text` array** ให้แปลงเป็น **`TEXT`** เก็บ JSON array string |
+| V8 | `V8__tasks_ensure_table.sql` | **`CREATE TABLE IF NOT EXISTS`** รูปแบบสุดท้าย (`tags` = TEXT default `'[]'`) กันครั้งที่ตารางยังไม่ถูกสร้าง |
+
+- Entity **`Task.tagsJson`**: คอลัมน์ `tags` เป็น **TEXT** ค่าเช่น **`[]`** หรือ **`["a","b"]`** — หลีกเลี่ยงปัญหา JDBC กับ `text[]` บน production  
+- ถ้า Flyway ไม่รันบน DB ที่ใช้จริง: รัน **`db/manual/create_tasks_table_postgres.sql`** ใน SQL Editor แล้ว redeploy backend
 
 ### คอลัมน์ที่สอดคล้องกับ `Supplement.java`
 
@@ -239,14 +337,26 @@ com.memi.lifeos/
 
 - ไม่ใช่ array ดิบ — เป็นอ็อบเจ็กต์ที่มี **`supplementStacks: { noon, night }`** แต่ละก้อนมี `items[]` เป็น **`SupplementStockItem`** (`id` เป็น string, `stock`, `doseTime`, …)
 
+### Task API (`/api/tasks`)
+
+- Spring คืน **`{ "success": true, "data": <T>, "message": null }`** (`ApiResponse`) — ฝั่ง Next **`lib/services/task.ts`** แยก **`data`** ออกก่อนใช้งาน
+
 ---
 
 ## 6) การพัฒนาและ deploy แบบสั้น
 
 1. **Local full stack:** จาก memiLife รัน `npm run local` (หรือรัน Spring เองที่ 8080 แล้ว `npm run dev`)
 2. **แก้ schema:** เพิ่ม `V{n}__....sql` ใน memi-backend → ปรับ entity/DTO/mapper/IT → push backend → ให้ environment รัน Flyway
-3. **แก้การแบ่งกองหรือฟิลด์ UI:** memiLife `lib/services/dashboard.ts` + `components/dashboard/supplement-stack.tsx`
-4. **Production Next:** ตั้ง **`MEMI_BACKEND_URL`** เป็น origin ของ API ที่ deploy แล้ว
+3. **แก้การแบ่งกองหรือฟิลด์ UI supplement:** `lib/services/dashboard.ts` + `components/dashboard/supplement-stack.tsx`
+4. **แก้ Memi Task:** `lib/services/task.ts`, `components/task/`, `app/api/tasks/`
+5. **Production Next (Vercel):** ตั้ง **`MEMI_BACKEND_URL`** = origin ของ API และ **`MEMI_BACKEND_API_KEY`** = ค่าเดียวกับ **`API_KEY`** ของ Spring (ให้ proxy ส่ง `X-API-Key` ตอน POST/PATCH/DELETE)
+
+### เมื่อ Railway / `/api/tasks` ได้ 500 หรือไม่มีตาราง
+
+- ดู **Deploy logs** ว่ามีบรรทัด **Flyway migrate** และไม่มี error SQL  
+- ยืนยันว่า **`DATABASE_URL`** ชี้ **Postgres เดียวกับ** ที่คุณเปิดใน SQL UI  
+- ถ้ายังไม่มีตาราง: รัน **`db/manual/create_tasks_table_postgres.sql`** แล้ว redeploy  
+- ถ้า **`GET /api/tasks`** ได้ 500 แต่ local H2 ปกติ: มักเป็น **schema / migration / คนละ database**
 
 ---
 

@@ -1,12 +1,13 @@
 ---
 name: memi-life-architecture
 description: >-
-  Describes the MemiLife full stack: Next.js dashboard (memiLife), Spring Boot API
-  (memi-backend sibling repo), Postgres/Flyway schema for supplements, env vars,
-  proxy route /api/supplements/all, dose_time noon/night rules, and local dev
-  (npm run local, MEMI_BACKEND_URL). Use when working on memiLife, memi-backend,
-  supplements, dashboard, Flyway migrations, Railway DATABASE_URL, CORS, or
-  integrating front and back.
+  Describes the MemiLife full stack: Next.js (memiLife) dashboard + /tasks Memi Task UI,
+  Spring Boot API (memi-backend), Postgres/Flyway (supplements + tasks), env vars
+  (MEMI_BACKEND_URL, MEMI_BACKEND_API_KEY), Next proxies /api/supplements/all and
+  /api/tasks/*, supplement dose_time noon/night rules, Task ApiResponse envelope,
+  tags stored as JSON text on tasks, and local dev (npm run local). Use when working
+  on memiLife, memi-backend, supplements, tasks, Flyway, Railway DATABASE_URL, CORS,
+  or integrating front and back.
 ---
 
 # MemiLife architecture (project skill)
@@ -17,25 +18,29 @@ For full directory trees, API tables, DB columns, and troubleshooting, open **[d
 
 ## Non-negotiable facts (short)
 
-1. **Two repositories:** This repo is **memiLife** (Next.js). **memi-backend** is a separate clone (default sibling folder `../memi-backend` for `npm run local`).
-2. **Browser never calls Spring directly** for the dashboard payload: the client fetches **`GET /api/supplements/all`** on the Next origin; the Route Handler proxies to **`GET {backendOrigin}/api/supplements/all`** (array of supplements).
-3. **Stack split (noon vs night)** is computed in **`lib/services/dashboard.ts`** from **`dose_time` / `doseTime` only** (HH:mm): 05:00–16:59 → noon; 17:00–04:59 → night; missing/invalid → noon. **`taken_time_slot` is not used for bucketing.**
-4. **Backend base URL for the Next server** uses only **origin** (scheme + host + port). Paths on `MEMI_BACKEND_URL` are stripped — append paths in code, not in env.
-5. **Database:** Flyway migrations live in memi-backend at `src/main/resources/db/migration/`. Production uses **Postgres** (`DATABASE_URL` mapped by `DatabaseUrlEnvironmentPostProcessor`). Profile **`h2`** uses in-memory H2 with Flyway disabled and JPA `update` + dev seed.
+1. **Two repositories:** **memiLife** (Next.js). **memi-backend** — sibling clone default `../memi-backend` for `npm run local`.
+2. **Supplements (dashboard):** Browser calls **`GET /api/supplements/all`** (Next); server proxies **`GET {origin}/api/supplements/all`** (Spring returns a **JSON array**); **`lib/services/dashboard.ts`** builds noon/night from **`doseTime` / `dose_time` only** (05:00–16:59 noon, 17:00–04:59 night; missing → noon). **`taken_time_slot` is not used for bucketing.**
+3. **Tasks (Memi Task):** UI at **`/tasks`**. Browser calls **`/api/tasks`** and subpaths; Next **`lib/server/proxy-spring.ts`** forwards to Spring with **`X-API-Key`** from the incoming request or **`MEMI_BACKEND_API_KEY`**. Spring **`/api/tasks`** returns **`ApiResponse<T>`** (wrapper in `com.memi.lifeos.web.dto`).
+4. **Backend base URL** for the Next server: **`export function backendOriginForServer()`** in `lib/services/dashboard.ts` — **origin only**; strip paths on `MEMI_BACKEND_URL` (`toHttpOriginOnly`).
+5. **Database:** Flyway in **`memi-backend/src/main/resources/db/migration/`**. Postgres via **`DATABASE_URL`**. **`tasks.tags`** is **TEXT** holding a **JSON array string** (e.g. `[]`), not native `text[]` (avoids JDBC issues). Manual DDL: **`memi-backend/db/manual/create_tasks_table_postgres.sql`**. Profile **`h2`**: Flyway off, JPA `update`, supplement seed.
 
 ## Where to change what
 
 | Goal | Primary location |
 |------|------------------|
-| UI for supplement stacks | `components/dashboard/supplement-stack.tsx` |
-| Noon/night grouping or API mapping | `lib/services/dashboard.ts` |
-| Proxy / error 502 | `app/api/supplements/all/route.ts` |
-| Spring REST paths / DTOs | `memi-backend` … `supplement/api`, `dto`, `service` |
-| Table/columns | Flyway `V*.sql` + `entity/Supplement.java` |
+| Supplement stack UI | `components/dashboard/supplement-stack.tsx` |
+| Noon/night / supplement fetch | `lib/services/dashboard.ts` |
+| Supplement proxy | `app/api/supplements/all/route.ts` |
+| Task list / form / timer | `components/task/*.tsx`, `app/tasks/page.tsx` |
+| Task client API + unwrap `ApiResponse` | `lib/services/task.ts` |
+| Task Next proxy + API key forward | `lib/server/proxy-spring.ts`, `app/api/tasks/**` |
+| Spring tasks REST / timer / soft delete | `memi-backend` … `task/api`, `dto`, `service` |
+| Schema | Flyway `V*.sql` + entities |
 
 ## Commands (memiLife)
 
-- `npm run dev` — Next only (backend must already run on 8080 or set `MEMI_BACKEND_URL`).
-- `npm run local` — Starts backend via `mvnw spring-boot:run` in a new window, waits 5s, then `npm run dev`. Override backend path with **`MEMI_BACKEND_DIR`**.
+- `npm run dev` — Next only (backend on 8080 or `MEMI_BACKEND_URL`).
+- `npm run local` — Backend `mvnw` + `npm run dev`; override path with **`MEMI_BACKEND_DIR`**.
+- `npm run lint` — runs **`tsc --noEmit`** (project ESLint CLI not wired).
 
-After editing migrations or entity fields, align **DTO mapper**, **integration tests**, and **dashboard.ts** field fallbacks (camelCase + snake_case).
+After migration or entity changes, align **DTOs/mappers/IT** (backend) and **types + task.ts** (frontend).
